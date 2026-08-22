@@ -1,8 +1,8 @@
-# M5Stack CoreS3 Standalone AI Assistant 🤖☀️
+# M5Stack CoreS3 Standalone AI Assistant
 
 An all-in-one, fully standalone desktop AI assistant with a touchscreen display and built-in speaker, powered by the **M5Stack CoreS3 (ESP32-S3)**. The microcontroller communicates directly with REST APIs and Apple CalDAV servers over Wi-Fi without needing a host computer or backend server.
 
-## 🌟 Key Features
+## Key Features
 
 * **100% Standalone:** Runs entirely on-device; no local server or running Python scripts required.
 * **Multi-iCloud Calendar Support:** Queries multiple Apple CalDAV calendars in parallel using direct HTTP `REPORT` requests.
@@ -11,12 +11,12 @@ An all-in-one, fully standalone desktop AI assistant with a touchscreen display 
 * **I2S Audio Streaming:** Plays back OpenAI Text-to-Speech audio directly through the CoreS3's onboard AW88298 I2S amplifier and speaker.
 * **Touch Screen Trigger:** Tap the screen to trigger the morning briefing on demand.
 
-## 🛠️ Hardware & Software Requirements
+## Hardware & Software Requirements
 
 * **Hardware:** [M5Stack CoreS3](https://docs.m5stack.com/en/core/CoreS3) (ESP32-S3)
 * **Development Environment:** VS Code + [PlatformIO IDE](https://platformio.org/) extension
 
-## 🚀 Getting Started
+## Getting Started
 
 1. **Clone the repository:**
    ```bash
@@ -36,7 +36,7 @@ An all-in-one, fully standalone desktop AI assistant with a touchscreen display 
    * Open the project in VS Code with PlatformIO.
    * Click **Build** (`Ctrl+Alt+B` / `Cmd+Option+B`) and then **Upload** to flash the firmware.
 
-## 📁 Project Structure
+## Project Structure
 
 ```text
 cores3-standalone/
