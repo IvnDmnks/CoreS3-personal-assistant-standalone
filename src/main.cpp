@@ -195,7 +195,7 @@ void createWavHeader(byte* header, uint32_t waveDataSize) {
     uint32_t byteRate = sampleRate * numChannels * (bitsPerSample / 8);
     uint32_t fileSize = 36 + waveDataSize;
 
-    // "RIFF" chunk descriptor
+    //* "RIFF" chunk descriptor
     header[0] = 'R'; header[1] = 'I'; header[2] = 'F'; header[3] = 'F';
     header[4] = (byte)(fileSize & 0xFF);
     header[5] = (byte)((fileSize >> 8) & 0xFF);
@@ -203,10 +203,10 @@ void createWavHeader(byte* header, uint32_t waveDataSize) {
     header[7] = (byte)((fileSize >> 24) & 0xFF);
     header[8] = 'W'; header[9] = 'A'; header[10] = 'V'; header[11] = 'E';
     
-    // "fmt " sub-chunk
+    //* "fmt" sub-chunk
     header[12] = 'f'; header[13] = 'm'; header[14] = 't'; header[15] = ' ';
-    header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0; // Subchunk1Size (16 for PCM)
-    header[20] = 1; header[21] = 0; // AudioFormat (1 for PCM)
+    header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0; //* Subchunk1Size (16 for PCM)
+    header[20] = 1; header[21] = 0; //* AudioFormat (1 for PCM)
     header[22] = (byte)numChannels; header[23] = 0;
     header[24] = (byte)(sampleRate & 0xFF);
     header[25] = (byte)((sampleRate >> 8) & 0xFF);
@@ -216,15 +216,85 @@ void createWavHeader(byte* header, uint32_t waveDataSize) {
     header[29] = (byte)((byteRate >> 8) & 0xFF);
     header[30] = (byte)((byteRate >> 16) & 0xFF);
     header[31] = (byte)((byteRate >> 24) & 0xFF);
-    header[32] = (byte)(numChannels * bitsPerSample / 8); header[33] = 0; // BlockAlign
+    header[32] = (byte)(numChannels * bitsPerSample / 8); header[33] = 0; //* BlockAlign
     header[34] = (byte)bitsPerSample; header[35] = 0;
     
-    // "data" sub-chunk
+    //* "data" sub-chunk
     header[36] = 'd'; header[37] = 'a'; header[38] = 't'; header[39] = 'a';
     header[40] = (byte)(waveDataSize & 0xFF);
     header[41] = (byte)((waveDataSize >> 8) & 0xFF);
     header[42] = (byte)((waveDataSize >> 16) & 0xFF);
     header[43] = (byte)((waveDataSize >> 24) & 0xFF);
+}
+
+String sendAudioToWhisper(byte* wavHeader, uint32_t recorded_bytes) {
+    WiFiClientSecure client;
+    client.setInsecure(); //* SSL check skip, less ram usage
+
+    M5.Display.drawString("Csatlakozas...", 180, 3);
+
+    if(!client.connect("api.openai.com", 443)) return "Hiba: Nem siikerult csatlakozni";
+
+    M5.Display.drawString("Feltoltes...", 180, 3);
+
+    String boundary = "----Esp32Boundary12345";
+
+    //* start of multipart message
+    String head = "--" + boundary + "\r\n";
+    head += "Content-Disposition: form-data; name=\"model\"\r\n\r\n";
+    head += "whisper-1\r\n";
+    head += "--" + boundary + "\r\n";
+    head += "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n";
+    head += "Content-Type: audio/wav\r\n\r\n";
+
+    //* end of multipart message
+    String tail = "\r\n" + boundary + "--\r\n";
+
+    uint32_t contentLength = head.length() + 44 + recorded_bytes + tail.length();
+
+    //* HTTP POST header
+    client.println("POST /v1/audio/transcriptions HTTP/1.1");
+    client.println("Host: api.openai.com");
+    client.println("Authorization: Bearer " + String(OPENAI_API_KEY)); 
+    client.print("Content-Length: ");
+    client.println(contentLength);
+    client.println("Content-Type: multipart/form-data; boundary=" + boundary);
+    client.println();
+
+    //* HTTP POST body
+    client.print(head);
+    client.write(wavHeader, 44);
+
+    uint8_t* audioData = (uint8_t*) rec_data;
+    size_t bytesRemaining = recorded_bytes;
+    size_t offset = 0; 
+    size_t chunkSize = 1024; //* sending audio data in 1024-byte chunks
+
+    while(bytesRemaining > 0) {
+        size_t bytesToWrite = (bytesRemaining < chunkSize) ? bytesRemaining : chunkSize;
+        client.write(audioData + offset, bytesToWrite);
+        offset += bytesToWrite;
+        bytesRemaining -= bytesToWrite;
+    }
+
+    //* multipart termination
+    client.print(tail);
+
+    //* Read response
+    String response = "";
+    bool headerPassed = false;
+    while(client.connected()) {
+        String line = client.readStringUntil('\n');
+        if(line == "\r") {
+            headerPassed = true;
+            break;
+        } 
+    }
+
+    if(headerPassed) response = client.readString();
+
+    client.stop();
+    return response;
 }
 
 // ------------------------------------------------------------------
