@@ -369,6 +369,13 @@ void loop() {
             uint32_t recorded_bytes = i * 2;
             byte wavHeader[44];
             createWavHeader(wavHeader, recorded_bytes);
+
+            String whisperResponse = sendAudioToWhisper(wavHeader, recorded_bytes);
+
+            M5.Display.fillScreen(BLACK);
+            M5.Display.setCursor(0, 0);
+            M5.Display.println("Visszakapott valasz:");
+            M5.Display.println(whisperResponse);
         }
     }
 }
