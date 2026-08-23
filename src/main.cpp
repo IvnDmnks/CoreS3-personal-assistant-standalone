@@ -11,11 +11,18 @@
 #include "AudioOutputI2S.h"
 #include "AudioGeneratorMP3.h"
 #include "AudioFileSourceHTTPStream.h"
+#include <ArduinoJson.h>
+
+//* --- GLOBALS ---
+
+// ------------------------------------------------------------------
 
 const char* CITY = "Budapest";
 const char* NTP_SERVER = "pool.ntp.org";
 const long  GMT_OFFSET_SEC = 3600;
 const int   DAYLIGHT_OFFSET_SEC = 3600;
+
+// ------------------------------------------------------------------
 
 static constexpr const size_t record_number = 512;
 static constexpr const size_t record_length = 320;
@@ -28,6 +35,16 @@ static size_t rec_record_idx  = 2;
     163840/16000 = 10,24 sec record time
     163840 * 2 = 327,68 KB / record 
 */
+
+// ------------------------------------------------------------------
+
+bool isAlarmSet = false;
+int alarmHour = 0;
+int alarmMinute = 0;
+bool isRinging = false;
+
+// ------------------------------------------------------------------
+// ------------------------------------------------------------------
 
 AudioGeneratorMP3 *mp3;
 AudioFileSourceHTTPStream *file;
@@ -158,8 +175,8 @@ String getGPTSummary(String systemRole, String userContext) {
 
 // ------------------------------------------------------------------
 
-//* --- Text To Speech ---
-void playTTS(String text) {
+//* --- TEXT TO SPEECH ---
+void playTTS(String text) { //! OpenAI TTS API still missing!!
     M5.Display.clear();
     M5.Display.setCursor(0, 5);
     M5.Display.println("Hangszintetizalas...");
@@ -173,7 +190,7 @@ void playTTS(String text) {
 
 // ------------------------------------------------------------------
 
-//* --- Speech To Text | Push To Talk ---
+//* --- SPEECH TO TEXT | PUSH TO TALK ---
 void startRecordingUI() {
     M5.Mic.begin();
     M5.Display.fillCircle(130, 15, 8, RED);
@@ -324,12 +341,98 @@ void playDailyBriefing() {
 
 // ------------------------------------------------------------------
 
+//* --- ALARM CLOCK ---
+bool extractAlarmTime(String text) {
+    HTTPClient http;
+
+    http.begin("https://api.openai.com/v1/chat/completions");
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", "Bearer " + String(OPENAI_API_KEY));
+
+    DynamicJsonDocument doc(1024);
+    doc["model"] = "gpt-4o-mini";
+    
+    JsonObject response_format = doc.createNestedObject("response_format");
+    response_format["type"] = "json_object";
+
+    JsonArray messages = doc.createNestedArray("messages");
+    
+    JsonObject systemMsg = messages.createNestedObject();
+    systemMsg["role"] = "system";
+    systemMsg["content"] = "Te egy okosóra ébresztő-kivonó modulja vagy. "
+                           "A feladatod a kapott szövegből kinyerni az ébresztés idejét 24 órás formátumban. "
+                           "KIZÁRÓLAG egy érvényes JSON-t adj vissza, markdown nélkül! "
+                           "Formátum: {\"hour\": 7, \"minute\": 30}. "
+                           "Ha nem találsz időpontot a szövegben, térj vissza ezzel: {\"hour\": -1, \"minute\": -1}.";
+
+    JsonObject userMsg = messages.createNestedObject();
+
+    userMsg["role"] = "user";
+    userMsg["content"] = text;
+
+    String requestBody;
+    serializeJson(doc, requestBody);
+
+    M5.Display.drawString("Gondolkodom...", 180, 3);
+    int httpResponseCode = http.POST(requestBody);
+
+    if (httpResponseCode == 200) {
+        String response = http.getString();
+        
+        DynamicJsonDocument responseDoc(2048);
+        deserializeJson(responseDoc, response);
+        
+        String gptJsonString = responseDoc["choices"][0]["message"]["content"].as<String>();
+        
+        DynamicJsonDocument alarmDoc(512);
+        deserializeJson(alarmDoc, gptJsonString);
+        
+        int extractedHour = alarmDoc["hour"];
+        int extractedMinute = alarmDoc["minute"];
+
+        if (extractedHour != -1) {
+            alarmHour = extractedHour;
+            alarmMinute = extractedMinute;
+            isAlarmSet = true;
+            http.end();
+            return true;
+        }
+    }
+    
+    http.end();
+    return false;
+}
+
+void checkAlarm() {
+    if(!isAlarmSet || isRinging) return;
+    
+    struct tm timeInfo;
+    if(getLocalTime(&timeInfo)) {
+        if(timeInfo.tm_hour == alarmHour && timeInfo.tm_min == alarmMinute) {
+            isAlarmSet = false; //* alarm set off, otherwise morning routine would run 60 times per minute
+            isRinging = true;
+
+            M5.Display.fillScreen(RED);
+            M5.Display.setTextColor(WHITE);
+            M5.Display.setCursor(20, 80);
+            M5.Display.setTextSize(3);
+            M5.Display.println("EBRESZTO!");
+            M5.Display.setTextSize(2);
+            M5.Display.setCursor(20, 140);
+            M5.Display.println("Erintsd meg a szundihoz!");
+            playDailyBriefing();
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+
 //* --- SETUP ---
 void setup() {
     auto cfg = M5.config();
     M5.begin(cfg);
 
-    rec_data = rec_data = (typeof(rec_data))heap_caps_malloc(record_size * sizeof(int16_t), MALLOC_CAP_SPIRAM);
+    rec_data = (typeof(rec_data))heap_caps_malloc(record_size * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     
     M5.Display.setTextColor(WHITE);
     M5.Display.setTextSize(2);
@@ -351,16 +454,38 @@ void setup() {
 // ------------------------------------------------------------------
 
 //* --- LOOP ---
+unsigned long lastAlarmCheck = 0;
+unsigned long lastBeep = 0;
+
 void loop() {
     M5.update();
     auto touch = M5.Touch.getDetail(0);
 
+    if(isRinging) {
+        if(millis() - lastBeep > 500) {
+            lastBeep = millis();
+            M5.Speaker.tone(1000, 200);
+        }
+        if(touch.wasPressed()) {
+            M5.Speaker.stop();
+            isRinging = false;
+            playDailyBriefing();
+        }
+        return;
+    }
+
+
+    if(millis() - lastAlarmCheck >= 1000) {
+        lastAlarmCheck = millis();
+        checkAlarm();
+    }
+
     if (touch.wasPressed()) {
-        if(touch.y > 120) playDailyBriefing(); //* upper side of the screen was pressed -> daily briefing 
+        if(touch.y < 120) playDailyBriefing(); //* upper side of the screen was pressed -> daily briefing 
         else {  //* bottom side of the screen was pressed -> STT
             startRecordingUI();
             int i = 0;
-            while(touch.isPressed() && i < record_size ) {
+            while(M5.Touch.getDetail(0).isPressed() && i < record_size) {
                 M5.update();
                 if(M5.Mic.record(&rec_data[i], record_length, record_samplerate)) i += record_length;
             }
@@ -371,11 +496,27 @@ void loop() {
             createWavHeader(wavHeader, recorded_bytes);
 
             String whisperResponse = sendAudioToWhisper(wavHeader, recorded_bytes);
-
-            M5.Display.fillScreen(BLACK);
-            M5.Display.setCursor(0, 0);
-            M5.Display.println("Visszakapott valasz:");
-            M5.Display.println(whisperResponse);
+            
+            DynamicJsonDocument whisperDoc(1024);
+            deserializeJson(whisperDoc, whisperResponse);
+            String transcribedText = whisperDoc["text"].as<String>();
+            
+            if (transcribedText.length() > 0) {
+                
+                if (extractAlarmTime(transcribedText)) {
+                    M5.Display.fillScreen(BLACK);
+                    M5.Display.setCursor(10, 50);
+                    char buff[64];
+                    sprintf(buff, "Ebreszto beallitva %02d:%02d-ra.", alarmHour, alarmMinute);
+                    String t = String(buff);
+                    M5.Display.printf("Ebreszto beallitva:\n%02d:%02d\n", alarmHour, alarmMinute);
+                    playTTS(t);
+                } else {
+                    M5.Display.fillScreen(BLACK);
+                    M5.Display.setCursor(10, 50);
+                    playTTS("Nem ertettem az idopontot.");
+                }
+            }
         }
     }
 }
