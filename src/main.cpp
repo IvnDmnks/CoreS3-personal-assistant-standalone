@@ -200,22 +200,82 @@ String getGPTSummary(String systemRole, String userContext) {
 // ------------------------------------------------------------------
 
 //* --- TEXT TO SPEECH ---
-void playTTS(String text) { //! OpenAI TTS API still missing!!
-    isPlayingTTS = true;
-    M5.Display.clear();
-    M5.Display.setCursor(0, 5);
-    M5.Display.println("Hangszintetizalas...");
+class AudioFileSourceWiFiClient : public AudioFileSource {
+    private: 
+        WiFiClientSecure *client;
+    public:
+        AudioFileSourceWiFiClient(WiFiClientSecure *c) : client(c) {}
+        virtual bool open(const char* filename) override { return true; }
+        virtual uint32_t read(void *data, uint32_t len) override {
+            if(!client) return 0;
+            return client->read((uint8_t*)data, len);
+        }
+        virtual bool seek(int32_t offset, int direction) override { return false; }
+        virtual bool close() override { return true; }
+        virtual bool isOpen() override { return client && (client->connected() || client->available()); }
+        virtual uint32_t getSize() override { return 0; }
+        virtual uint32_t getPos() override { return 0; }
+};
 
-    out = new AudioOutputI2S();
-    out->SetPinout(34, 33, 0); 
-    file = new AudioFileSourceHTTPStream();
-    
-    M5.Display.println("Stream (teszt) indul...");
+void playTTS(String text) {
+    if(text.length() == 0) return;
+    isPlayingTTS = true;
+
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    if(!client.connect("api.openai.com", 443)) {
+        isPlayingTTS = false;
+        return;
+    }
+
+    StaticJsonDocument<512> doc;
+    doc["model"] = "tts-1";
+    doc["input"] = text;
+    doc["voice"] = "alloy"; //* Optional sounds: alloy, echo, fable, onyx, nova, shimmer
+    doc["response_format"] = "mp3";
+
+    String requestBody;
+    serializeJson(doc, requestBody);
+
+    client.println("POST /v1/audio/speech HTTP/1.1");
+    client.println("Host: api.openai.com");
+    client.println("Authorization: Bearer " + String(OPENAI_API_KEY));
+    client.println("Content-Type: application/json");
+    client.print("Content-Length: ");
+    client.println(requestBody.length());
+    client.println("Connection: close");
+    client.println();
+    client.print(requestBody);
+
+    while(client.connected()) {
+        String line = client.readStringUntil('\n');
+        if(line == "\r") break;
+    }
+
+    AudioFileSourceWiFiClient *fileSource = new AudioFileSourceWiFiClient(&client);
+    AudioOutputI2S *audioOut = new AudioOutputI2S();
+
+    audioOut->SetPinout(34, 33, 0);
+
+    AudioGeneratorMP3 *mp3Decoder = new AudioGeneratorMP3();
+    mp3Decoder->begin(fileSource, audioOut);
+
+    while(mp3Decoder->isRunning()) {
+        if(!mp3Decoder->loop()) {
+            mp3Decoder->stop();
+        }
+        M5.update();
+    }
+
+    delete mp3Decoder;
+    delete audioOut;
+    delete fileSource;
+    client.stop();
 
     isPlayingTTS = false;
     chatStateStartTime = millis();
 }
-
 
 // ------------------------------------------------------------------
 
