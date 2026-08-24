@@ -1,5 +1,6 @@
 #include <M5CoreS3.h>
 #include <WiFi.h>
+#include <WiFiMulti.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
@@ -21,6 +22,10 @@ const char* CITY = "Budapest";
 const char* NTP_SERVER = "pool.ntp.org";
 const long  GMT_OFFSET_SEC = 3600;
 const int   DAYLIGHT_OFFSET_SEC = 3600;
+
+// ------------------------------------------------------------------
+
+WiFiMulti wifiMulti;
 
 // ------------------------------------------------------------------
 
@@ -471,14 +476,25 @@ void setup() {
     M5.Display.setTextColor(WHITE);
     M5.Display.setTextSize(2);
     M5.Display.println("Inditas...");
+    
+    syncTime(); 
 
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    while (WiFi.status() != WL_CONNECTED) {
+    M5.Display.println("WiFi halozatok beallitasa...");
+    wifiMulti.addAP(WIFI_SSID1, WIFI_PASS1);
+    wifiMulti.addAP(WIFI_SSID2, WIFI_PASS2);
+
+    M5.Display.print("Csatlakozas...");
+
+    while(wifiMulti.run() != WL_CONNECTED) {
         delay(500);
         M5.Display.print(".");
     }
-    
-    syncTime(); 
+
+    M5.Display.println("");
+    M5.Display.print("Sikeresen csatlakozva ehhez: ");
+    M5.Display.println(WiFi.SSID());
+    M5.Display.print("IP cim: ");
+    M5.Display.println(WiFi.localIP());
 }
 
 // ------------------------------------------------------------------
@@ -585,6 +601,11 @@ unsigned long lastBeep = 0;
 void loop() {
     M5.update();
     auto touch = M5.Touch.getDetail(0);
+
+    if (wifiMulti.run() != WL_CONNECTED) {
+        Serial.println("WiFi kapcsolat megszakadt, ujracsatlakozas...");
+        delay(1000); 
+    }
 
     if(isRinging) {
         checkTableKnock();

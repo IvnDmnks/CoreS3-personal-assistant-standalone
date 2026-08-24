@@ -1,8 +1,11 @@
 #pragma once
 
 // --- WI-FI SETTINGS ---
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID1 = "YOUR_WIFI_SSID";
+const char* WIFI_PASS1 = "YOUR_WIFI_PASSWORD";
+
+const char* WIFI_SSID2 = "YOUR_WIFI_SSID";
+const char* WIFI_PASS2 = "YOUR_WIFI_PASSWORD";
 
 // --- API KEYS ---
 const char* OPENAI_API_KEY = "sk-proj-your_openai_api_key";
