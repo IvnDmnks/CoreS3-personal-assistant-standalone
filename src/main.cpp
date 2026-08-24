@@ -175,6 +175,70 @@ String getGPTSummary(String systemRole, String userContext) {
 
 // ------------------------------------------------------------------
 
+//* --- GTP INTENT ---
+bool processIntent(String text) {
+    HTTPClient http;
+    
+    http.begin("https://api.openai.com/v1/chat/completions");
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", "Bearer " + String(OPENAI_API_KEY));
+    
+    DynamicJsonDocument doc(1024);
+    doc["model"] = "gpt-4o-mini";
+    
+    JsonObject response_format = doc.createNestedObject("response_format");
+    response_format["type"] = "json_object";
+    
+    JsonArray messages = doc.createNestedArray("messages");
+    
+    JsonObject systemMsg = messages.createNestedObject();
+    systemMsg["role"] = "system";
+    systemMsg["content"] = "Te egy okosóra AI asszisztense vagy. A felhasználó mondata alapján dötsd el a szándékot! "
+                           "KIZÁRÓLAG egy érvényes JSON-t adj vissza! "
+                           "1. Ébresztésnél: {\"type\": \"alarm\", \"hour\": 7, \"minute\": 30} "
+                           "2. Kérdésnél vagy általános beszélgetésnél válaszolj röviden, barátságosan, max 2 mondatban: "
+                           "{\"type\": \"chat\", \"reply\": \"A válaszod szövege...\"}";
+    
+    JsonObject userMsg = messages.createNestedObject();
+    
+    userMsg["role"] = "user";
+    userMsg["content"] = text;
+    
+    String requestBody;
+    serializeJson(doc, requestBody);
+    
+    M5.Display.drawString("Gondolkodom...", 180, 3);
+    int httpResponseCode = http.POST(requestBody);
+    
+    if (httpResponseCode == 200) {
+        String response = http.getString();
+        
+        DynamicJsonDocument responseDoc(2048);
+        deserializeJson(responseDoc, response);
+        
+        String gptJsonString = responseDoc["choices"][0]["message"]["content"].as<String>();
+        
+        DynamicJsonDocument alarmDoc(512);
+        deserializeJson(alarmDoc, gptJsonString);
+        
+        int extractedHour = alarmDoc["hour"];
+        int extractedMinute = alarmDoc["minute"];
+        
+        if (extractedHour != -1) {
+            alarmHour = extractedHour;
+            alarmMinute = extractedMinute;
+            isAlarmSet = true;
+            http.end();
+            return true;
+        }
+    }
+    
+    http.end();
+    return false;
+}
+
+// ------------------------------------------------------------------
+
 //* --- TEXT TO SPEECH ---
 void playTTS(String text) { //! OpenAI TTS API still missing!!
     M5.Display.clear();
@@ -342,67 +406,6 @@ void playDailyBriefing() {
 // ------------------------------------------------------------------
 
 //* --- ALARM CLOCK ---
-bool extractAlarmTime(String text) {
-    HTTPClient http;
-
-    http.begin("https://api.openai.com/v1/chat/completions");
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", "Bearer " + String(OPENAI_API_KEY));
-
-    DynamicJsonDocument doc(1024);
-    doc["model"] = "gpt-4o-mini";
-    
-    JsonObject response_format = doc.createNestedObject("response_format");
-    response_format["type"] = "json_object";
-
-    JsonArray messages = doc.createNestedArray("messages");
-    
-    JsonObject systemMsg = messages.createNestedObject();
-    systemMsg["role"] = "system";
-    systemMsg["content"] = "Te egy okosóra ébresztő-kivonó modulja vagy. "
-                           "A feladatod a kapott szövegből kinyerni az ébresztés idejét 24 órás formátumban. "
-                           "KIZÁRÓLAG egy érvényes JSON-t adj vissza, markdown nélkül! "
-                           "Formátum: {\"hour\": 7, \"minute\": 30}. "
-                           "Ha nem találsz időpontot a szövegben, térj vissza ezzel: {\"hour\": -1, \"minute\": -1}.";
-
-    JsonObject userMsg = messages.createNestedObject();
-
-    userMsg["role"] = "user";
-    userMsg["content"] = text;
-
-    String requestBody;
-    serializeJson(doc, requestBody);
-
-    M5.Display.drawString("Gondolkodom...", 180, 3);
-    int httpResponseCode = http.POST(requestBody);
-
-    if (httpResponseCode == 200) {
-        String response = http.getString();
-        
-        DynamicJsonDocument responseDoc(2048);
-        deserializeJson(responseDoc, response);
-        
-        String gptJsonString = responseDoc["choices"][0]["message"]["content"].as<String>();
-        
-        DynamicJsonDocument alarmDoc(512);
-        deserializeJson(alarmDoc, gptJsonString);
-        
-        int extractedHour = alarmDoc["hour"];
-        int extractedMinute = alarmDoc["minute"];
-
-        if (extractedHour != -1) {
-            alarmHour = extractedHour;
-            alarmMinute = extractedMinute;
-            isAlarmSet = true;
-            http.end();
-            return true;
-        }
-    }
-    
-    http.end();
-    return false;
-}
-
 void checkAlarm() {
     if(!isAlarmSet || isRinging) return;
     
@@ -422,6 +425,17 @@ void checkAlarm() {
             M5.Display.println("Erintsd meg a szundihoz!");
             playDailyBriefing();
         }
+    }
+}
+
+void checkTableKnock() {
+    float ax, ay, az;
+    M5.Imu.getAccelData(&ax, &ay, &az);
+    float totalAccelerate = sqrt(ax*ax + ay*ay + az*az);
+    if(totalAccelerate > 2.0) {
+        M5.Speaker.stop();
+        isRinging = false;
+        playDailyBriefing();
     }
 }
 
@@ -462,6 +476,7 @@ void loop() {
     auto touch = M5.Touch.getDetail(0);
 
     if(isRinging) {
+        checkTableKnock();
         if(millis() - lastBeep > 500) {
             lastBeep = millis();
             M5.Speaker.tone(1000, 200);
@@ -473,7 +488,6 @@ void loop() {
         }
         return;
     }
-
 
     if(millis() - lastAlarmCheck >= 1000) {
         lastAlarmCheck = millis();
@@ -502,21 +516,13 @@ void loop() {
             String transcribedText = whisperDoc["text"].as<String>();
             
             if (transcribedText.length() > 0) {
-                
-                if (extractAlarmTime(transcribedText)) {
+                if (!processIntent(transcribedText)) {
                     M5.Display.fillScreen(BLACK);
                     M5.Display.setCursor(10, 50);
-                    char buff[64];
-                    sprintf(buff, "Ebreszto beallitva %02d:%02d-ra.", alarmHour, alarmMinute);
-                    String t = String(buff);
-                    M5.Display.printf("Ebreszto beallitva:\n%02d:%02d\n", alarmHour, alarmMinute);
-                    playTTS(t);
-                } else {
-                    M5.Display.fillScreen(BLACK);
-                    M5.Display.setCursor(10, 50);
-                    playTTS("Nem ertettem az idopontot.");
+                    playTTS("Sajnos nem ertettem, amit mondtal.");
                 }
             }
+
         }
     }
 }
