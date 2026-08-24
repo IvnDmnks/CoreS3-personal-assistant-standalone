@@ -13,9 +13,9 @@
 #include "AudioFileSourceHTTPStream.h"
 #include <ArduinoJson.h>
 
+//* ---------------
 //* --- GLOBALS ---
-
-// ------------------------------------------------------------------
+//* ---------------
 
 const char* CITY = "Budapest";
 const char* NTP_SERVER = "pool.ntp.org";
@@ -42,6 +42,25 @@ bool isAlarmSet = false;
 int alarmHour = 0;
 int alarmMinute = 0;
 bool isRinging = false;
+bool isPlayingTTS = false;
+bool isRecording = false;
+
+// ------------------------------------------------------------------
+
+enum UIState {
+    CLOCK_STATE,
+    CHAT_STATE
+};
+
+UIState currState = CLOCK_STATE;
+
+M5Canvas canvas(&M5.Display);
+
+String lastUserSpeech = "";
+String lastAIReply = "";
+String statusMessage = "";
+
+unsigned long chatStateStartTime = 0;
 
 // ------------------------------------------------------------------
 // ------------------------------------------------------------------
@@ -175,72 +194,9 @@ String getGPTSummary(String systemRole, String userContext) {
 
 // ------------------------------------------------------------------
 
-//* --- GTP INTENT ---
-bool processIntent(String text) {
-    HTTPClient http;
-    
-    http.begin("https://api.openai.com/v1/chat/completions");
-    http.addHeader("Content-Type", "application/json");
-    http.addHeader("Authorization", "Bearer " + String(OPENAI_API_KEY));
-    
-    DynamicJsonDocument doc(1024);
-    doc["model"] = "gpt-4o-mini";
-    
-    JsonObject response_format = doc.createNestedObject("response_format");
-    response_format["type"] = "json_object";
-    
-    JsonArray messages = doc.createNestedArray("messages");
-    
-    JsonObject systemMsg = messages.createNestedObject();
-    systemMsg["role"] = "system";
-    systemMsg["content"] = "Te egy okosóra AI asszisztense vagy. A felhasználó mondata alapján dötsd el a szándékot! "
-                           "KIZÁRÓLAG egy érvényes JSON-t adj vissza! "
-                           "1. Ébresztésnél: {\"type\": \"alarm\", \"hour\": 7, \"minute\": 30} "
-                           "2. Kérdésnél vagy általános beszélgetésnél válaszolj röviden, barátságosan, max 2 mondatban: "
-                           "{\"type\": \"chat\", \"reply\": \"A válaszod szövege...\"}";
-    
-    JsonObject userMsg = messages.createNestedObject();
-    
-    userMsg["role"] = "user";
-    userMsg["content"] = text;
-    
-    String requestBody;
-    serializeJson(doc, requestBody);
-    
-    M5.Display.drawString("Gondolkodom...", 180, 3);
-    int httpResponseCode = http.POST(requestBody);
-    
-    if (httpResponseCode == 200) {
-        String response = http.getString();
-        
-        DynamicJsonDocument responseDoc(2048);
-        deserializeJson(responseDoc, response);
-        
-        String gptJsonString = responseDoc["choices"][0]["message"]["content"].as<String>();
-        
-        DynamicJsonDocument alarmDoc(512);
-        deserializeJson(alarmDoc, gptJsonString);
-        
-        int extractedHour = alarmDoc["hour"];
-        int extractedMinute = alarmDoc["minute"];
-        
-        if (extractedHour != -1) {
-            alarmHour = extractedHour;
-            alarmMinute = extractedMinute;
-            isAlarmSet = true;
-            http.end();
-            return true;
-        }
-    }
-    
-    http.end();
-    return false;
-}
-
-// ------------------------------------------------------------------
-
 //* --- TEXT TO SPEECH ---
 void playTTS(String text) { //! OpenAI TTS API still missing!!
+    isPlayingTTS = true;
     M5.Display.clear();
     M5.Display.setCursor(0, 5);
     M5.Display.println("Hangszintetizalas...");
@@ -250,23 +206,96 @@ void playTTS(String text) { //! OpenAI TTS API still missing!!
     file = new AudioFileSourceHTTPStream();
     
     M5.Display.println("Stream (teszt) indul...");
+
+    isPlayingTTS = false;
+    chatStateStartTime = millis();
+}
+
+
+// ------------------------------------------------------------------
+
+//* --- GTP INTENT ---
+bool processIntent(String text) {
+    HTTPClient http;
+    http.begin("https://api.openai.com/v1/chat/completions");
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", "Bearer " + String(OPENAI_API_KEY));
+    
+    DynamicJsonDocument doc(1024);
+    doc["model"] = "gpt-4o-mini";
+    JsonObject response_format = doc.createNestedObject("response_format");
+    response_format["type"] = "json_object";
+    JsonArray messages = doc.createNestedArray("messages");
+    JsonObject systemMsg = messages.createNestedObject();
+    systemMsg["role"] = "system";
+    systemMsg["content"] = "Te egy okosóra AI asszisztense vagy. A felhasználó mondata alapján dötsd el a szándékot! "
+                           "KIZÁRÓLAG egy érvényes JSON-t adj vissza! "
+                           "1. Ébresztésnél: {\"type\": \"alarm\", \"hour\": 7, \"minute\": 30} "
+                           "2. Kérdésnél/beszélgetésnél válaszolj röviden, max 2 mondatban: "
+                           "{\"type\": \"chat\", \"reply\": \"A válaszod...\"}";
+    JsonObject userMsg = messages.createNestedObject();
+    userMsg["role"] = "user";
+    userMsg["content"] = text;
+    
+    String requestBody;
+    serializeJson(doc, requestBody);
+    
+    statusMessage = "Gondolkodom...";
+    int httpResponseCode = http.POST(requestBody);
+    
+    if(httpResponseCode == 200) {
+        String response = http.getString();
+        DynamicJsonDocument responseDoc(2048);
+        deserializeJson(responseDoc, response);
+        String gptJsonString = responseDoc["choices"][0]["message"]["content"].as<String>();
+        
+        DynamicJsonDocument resultDoc(1024);
+        deserializeJson(resultDoc, gptJsonString);
+        
+        String intentType = resultDoc["type"].as<String>();
+        
+        if(intentType == "alarm") {
+            alarmHour = resultDoc["hour"];
+            alarmMinute = resultDoc["minute"];
+            isAlarmSet = true;
+            char buff[64];
+            sprintf(buff, "Ebreszto beallitva %02d:%02d-ra.", alarmHour, alarmMinute);
+            statusMessage = "Ebreszto beallitva!";
+            lastAIReply = String(buff);
+            playTTS(String(buff));
+            http.end();
+            return true;
+        } 
+        else if(intentType == "chat") {
+            String aiReply = resultDoc["reply"].as<String>();
+            statusMessage = "Valaszolok...";
+            lastAIReply = aiReply;
+            playTTS(aiReply);
+            http.end();
+            return true;
+        }
+    }
+    http.end();
+    return false;
 }
 
 // ------------------------------------------------------------------
 
 //* --- SPEECH TO TEXT | PUSH TO TALK ---
 void startRecordingUI() {
+    isRecording = true;
     M5.Mic.begin();
-    M5.Display.fillCircle(130, 15, 8, RED);
-    M5.Display.drawString("REC", 180, 3);
-
+    currState = CHAT_STATE;
+    statusMessage = "Hallgatlak...";
+    lastUserSpeech = "";
+    lastAIReply = "";
     memset(rec_data, 0, record_size * sizeof(int16_t));
 }
 
 void stopRecordingUI() {
+    isRecording = false;
     M5.Mic.end();
-    M5.Display.fillCircle(130, 15, 8, BLACK);
-    M5.Display.drawString("Feldolgozas...", 180, 3);
+    statusMessage = "Feldolgozas...";
 }
 
 void createWavHeader(byte* header, uint32_t waveDataSize) {
@@ -382,23 +411,22 @@ String sendAudioToWhisper(byte* wavHeader, uint32_t recorded_bytes) {
 
 //* --- MORNING ROUTINE ---
 void playDailyBriefing() {
-    M5.Display.clear();
-    M5.Display.setCursor(0, 5);
-    M5.Display.println("Adatok letoltese...");
+    currState = CHAT_STATE;
+    statusMessage = "Napi osszefoglalo...";
+    lastUserSpeech = "Napi osszefoglalo keres";
+    lastAIReply = "Adatok letoltese...";
 
     String weather_info = get_weather();
     String events_str = get_today_events();
     
     String prompt_context = "Mai idojaras: " + weather_info + "\n" + "Mai naptarbejegyzesek: " + events_str;
-                            
-    M5.Display.println("AI general...");
     String system_prompt = "Egy asztali AI asszisztens vagy. Foglald ossze a napot kozvetlen, baratsagos hangnemben, magyarul! Maximum 3-4 mondat.";
+                            
+    lastAIReply = "AI general...";
     
     String ai_text = getGPTSummary(system_prompt, prompt_context);
     
-    M5.Display.clear();
-    M5.Display.setCursor(0, 0);
-    M5.Display.println(ai_text);
+    lastAIReply = ai_text;
     
     playTTS(ai_text);
 }
@@ -414,16 +442,6 @@ void checkAlarm() {
         if(timeInfo.tm_hour == alarmHour && timeInfo.tm_min == alarmMinute) {
             isAlarmSet = false; //* alarm set off, otherwise morning routine would run 60 times per minute
             isRinging = true;
-
-            M5.Display.fillScreen(RED);
-            M5.Display.setTextColor(WHITE);
-            M5.Display.setCursor(20, 80);
-            M5.Display.setTextSize(3);
-            M5.Display.println("EBRESZTO!");
-            M5.Display.setTextSize(2);
-            M5.Display.setCursor(20, 140);
-            M5.Display.println("Erintsd meg a szundihoz!");
-            playDailyBriefing();
         }
     }
 }
@@ -446,6 +464,8 @@ void setup() {
     auto cfg = M5.config();
     M5.begin(cfg);
 
+    canvas.createSprite(320, 240);
+
     rec_data = (typeof(rec_data))heap_caps_malloc(record_size * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     
     M5.Display.setTextColor(WHITE);
@@ -459,10 +479,101 @@ void setup() {
     }
     
     syncTime(); 
+}
 
-    M5.Display.clear();
-    M5.Display.setCursor(0, 10);
-    M5.Display.println("Kesz! Erintsd meg!");
+// ------------------------------------------------------------------
+
+//* --- UI ---
+void drawUI() {
+    canvas.fillScreen(BLACK);
+
+    if(currState == CLOCK_STATE) {
+        //* --- DIGITAL CLOCK ---
+        //* top bar
+        canvas.setTextDatum(TC_DATUM); //* top-center
+        canvas.setTextColor(DARKGREY);
+        canvas.setTextSize(1);
+        if(isAlarmSet) {
+            char alarmBuffer[32];
+            sprintf(alarmBuffer, "Ebreszto: %02d:%02d", alarmHour, alarmMinute);
+            canvas.drawString(alarmBuffer, 160, 10);
+        } else {
+            canvas.drawString("Ebreszto: Nincs beallitva", 160, 10);
+        }
+
+        //* middle bar
+        struct tm timeinfo;
+        if(getLocalTime((&timeinfo))) {
+            char timeBuffer[10];
+            sprintf(timeBuffer, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+
+            canvas.setTextColor(CYAN, BLACK);
+            canvas.setTextDatum(MC_DATUM); //* middle-center
+            canvas.setTextSize(5);
+            canvas.drawString(timeBuffer, 160, 95);
+
+            char dateBuffer[32];
+            sprintf(dateBuffer, "%04d.%02d.%02d.", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
+            canvas.setTextColor(WHITE);
+            canvas.setTextSize(2);
+            canvas.drawString(dateBuffer, 160, 140);
+        } else {
+            canvas.setTextColor(RED);
+            canvas.setTextDatum(MC_DATUM);
+            canvas.setTextSize(2);
+            canvas.drawString("Ido szinkroniizalasa...", 160, 95);
+        }
+
+        //* bottom bar
+        canvas.drawRoundRect(10, 185, 300, 45, 8, GREEN);
+        canvas.setTextColor(GREEN);
+        canvas.setTextSize(2);
+        canvas.drawString("TARTSD NYOMVA A BESZEDHEZ", 160, 207);
+    }
+    else if(currState == CHAT_STATE) {
+        //* --- CHAT BOT VIEW ---
+        //* top bar
+        canvas.fillRect(0, 0, 320,  30, NAVY);
+        canvas.setTextColor(WHITE);
+        canvas.setTextDatum(MC_DATUM);
+        canvas.setTextSize(2);
+        canvas.drawString(statusMessage, 160, 15);
+
+        //* text box
+        canvas.setTextDatum(TL_DATUM); //* top-left
+        canvas.setTextSize(2);
+        canvas.setTextWrap(true);
+
+        //* user side
+        if(lastUserSpeech.length() > 0) {
+            canvas.setTextColor(GREEN);
+            canvas.drawString("Te: ", 10, 40);
+            canvas.setTextColor(WHITE);
+            canvas.setCursor(10, 60);
+            canvas.print(lastUserSpeech);
+        }
+
+        //* ai reply
+        if(lastAIReply.length() > 0) {
+            canvas.setTextColor(CYAN);
+            canvas.drawString("Ai: ", 10, 125);
+            canvas.setTextColor(WHITE);
+            canvas.setCursor(10, 145);
+            canvas.print(lastAIReply);
+        }
+    }
+
+    if (isRinging) {
+        canvas.fillScreen(RED);
+        canvas.setTextColor(WHITE);
+        canvas.setTextDatum(MC_DATUM);
+        canvas.setTextSize(4);
+        canvas.drawString("EBRESZTO!", 160, 100);
+        canvas.setTextSize(2);
+        canvas.drawString("Erints/Uss a szundihoz!", 160, 160);
+    }
+
+    canvas.pushSprite(0, 0);
 }
 
 // ------------------------------------------------------------------
@@ -486,12 +597,21 @@ void loop() {
             isRinging = false;
             playDailyBriefing();
         }
+        drawUI();
         return;
     }
 
     if(millis() - lastAlarmCheck >= 1000) {
         lastAlarmCheck = millis();
         checkAlarm();
+    }
+
+    if(currState == CHAT_STATE && !isRinging && !isPlayingTTS) {
+        if (millis() - chatStateStartTime > 10000) {
+            currState = CLOCK_STATE;
+            lastUserSpeech = "";
+            lastAIReply = "";
+        }
     }
 
     if (touch.wasPressed()) {
@@ -501,9 +621,11 @@ void loop() {
             int i = 0;
             while(M5.Touch.getDetail(0).isPressed() && i < record_size) {
                 M5.update();
+                drawUI();
                 if(M5.Mic.record(&rec_data[i], record_length, record_samplerate)) i += record_length;
             }
             stopRecordingUI();
+            drawUI();
 
             uint32_t recorded_bytes = i * 2;
             byte wavHeader[44];
@@ -525,4 +647,6 @@ void loop() {
 
         }
     }
+
+    drawUI();
 }
