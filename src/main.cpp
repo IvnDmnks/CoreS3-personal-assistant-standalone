@@ -229,10 +229,10 @@ void playTTS(String text) {
         return;
     }
 
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<512> doc; 
     doc["model"] = "tts-1";
     doc["input"] = text;
-    doc["voice"] = "alloy"; //* Optional sounds: alloy, echo, fable, onyx, nova, shimmer
+    doc["voice"] = "nova"; //* Optional voices: alloy, echo, fable, onyx, nova, shimmer
     doc["response_format"] = "mp3";
 
     String requestBody;
