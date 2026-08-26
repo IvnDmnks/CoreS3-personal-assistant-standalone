@@ -8,10 +8,14 @@
 #include "mbedtls/base64.h"
 
 #include "secrets.h"
+#include "config.h"
 
 #include "AudioOutputI2S.h"
 #include "AudioGeneratorMP3.h"
 #include "AudioFileSourceHTTPStream.h"
+#include <SD.h>
+#include <SPI.h>
+#include "AudioFileSourceSD.h"
 #include <ArduinoJson.h>
 
 //* ---------------
@@ -256,7 +260,7 @@ void playTTS(String text) {
     AudioFileSourceWiFiClient *fileSource = new AudioFileSourceWiFiClient(&client);
     AudioOutputI2S *audioOut = new AudioOutputI2S();
 
-    audioOut->SetPinout(34, 33, 0);
+    audioOut->SetPinout(34, 33, 13);
 
     AudioGeneratorMP3 *mp3Decoder = new AudioGeneratorMP3();
     mp3Decoder->begin(fileSource, audioOut);
@@ -275,6 +279,34 @@ void playTTS(String text) {
 
     isPlayingTTS = false;
     chatStateStartTime = millis();
+}
+
+// ------------------------------------------------------------------
+//* --- SD SOUND PLAYER ---
+void playSDSound(const char* fileName) {
+    if(!SD.exists(fileName)) {
+        Serial.printf("Hia: Nem talalhato hangfajl: %s\n", fileName);
+        return;
+    }
+
+    AudioFileSourceSD *fileSD = new AudioFileSourceSD(fileName);
+    AudioOutputI2S *audioOutSD = new AudioOutputI2S();
+
+    audioOutSD->SetPinout(I2S_BCLK_PIN, I2S_LRCK_PIN, I2S_DOUT_PIN);
+
+    AudioGeneratorMP3 *mp3Decoder = new AudioGeneratorMP3();
+    mp3Decoder->begin(fileSD, audioOutSD);
+
+    while(mp3Decoder->isRunning()) {
+        if(!mp3Decoder->loop()) {
+            mp3Decoder->stop();
+        }
+        M5.update();
+    }
+
+    delete mp3Decoder;
+    delete audioOutSD;
+    delete fileSD;
 }
 
 // ------------------------------------------------------------------
@@ -323,6 +355,7 @@ bool processIntent(String text) {
             alarmHour = resultDoc["hour"];
             alarmMinute = resultDoc["minute"];
             isAlarmSet = true;
+            playSDSound(SOUND_ALARM_SET);
             char buff[64];
             sprintf(buff, "Ebreszto beallitva %02d:%02d-ra.", alarmHour, alarmMinute);
             statusMessage = "Ebreszto beallitva!";
@@ -348,6 +381,7 @@ bool processIntent(String text) {
 
 //* --- SPEECH TO TEXT | PUSH TO TALK ---
 void startRecordingUI() {
+    playSDSound(SOUND_LISTENING);
     isRecording = true;
     M5.Mic.begin();
     currState = CHAT_STATE;
@@ -408,7 +442,10 @@ String sendAudioToWhisper(byte* wavHeader, uint32_t recorded_bytes) {
 
     M5.Display.drawString("Csatlakozas...", 180, 3);
 
-    if(!client.connect("api.openai.com", 443)) return "Hiba: Nem siikerult csatlakozni";
+    if(!client.connect("api.openai.com", 443)) {
+        playSDSound(SOUND_ERROR);
+        return "Hiba: Nem siikerult csatlakozni";
+    } 
 
     M5.Display.drawString("Feltoltes...", 180, 3);
 
@@ -528,9 +565,9 @@ void checkTableKnock() {
 void setup() {
     auto cfg = M5.config();
     M5.begin(cfg);
-
+    
     canvas.createSprite(320, 240);
-
+    
     rec_data = (typeof(rec_data))heap_caps_malloc(record_size * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     
     M5.Display.setTextColor(WHITE);
@@ -538,23 +575,38 @@ void setup() {
     M5.Display.println("Inditas...");
     
     syncTime(); 
-
+    
     M5.Display.println("WiFi halozatok beallitasa...");
     wifiMulti.addAP(WIFI_SSID1, WIFI_PASS1);
     wifiMulti.addAP(WIFI_SSID2, WIFI_PASS2);
-
+    
     M5.Display.print("Csatlakozas...");
-
+    
     while(wifiMulti.run() != WL_CONNECTED) {
         delay(500);
         M5.Display.print(".");
     }
-
+    
     M5.Display.println("");
     M5.Display.print("Sikeresen csatlakozva ehhez: ");
     M5.Display.println(WiFi.SSID());
     M5.Display.print("IP cim: ");
     M5.Display.println(WiFi.localIP());
+    playSDSound(SOUND_WIFI_OK);
+
+    Serial.begin(115200);
+    while(!Serial) {
+        ; //* Wait until the port get set up
+    }
+
+    Serial.println("SD kartya inicializalasa folyamatban...");
+
+    if(!SD.begin(SD_CS_PIN)) {
+        Serial.println("Hiba: Az SD kartyat nem sikerut inicializalni!");
+        Serial.println("Ellenorizd a pineket és hogy be van-e dugva a kartya");
+    } else {
+        Serial.println("SD kartya sikeresen inicializalva!");
+    }
 }
 
 // ------------------------------------------------------------------
@@ -663,6 +715,7 @@ void loop() {
     auto touch = M5.Touch.getDetail(0);
 
     if (wifiMulti.run() != WL_CONNECTED) {
+        playSDSound(SOUND_WIFI_ERR);
         Serial.println("WiFi kapcsolat megszakadt, ujracsatlakozas...");
         delay(1000); 
     }
@@ -720,6 +773,7 @@ void loop() {
             
             if (transcribedText.length() > 0) {
                 if (!processIntent(transcribedText)) {
+                    playSDSound(SOUND_ERROR);
                     M5.Display.fillScreen(BLACK);
                     M5.Display.setCursor(10, 50);
                     playTTS("Sajnos nem ertettem, amit mondtal.");
