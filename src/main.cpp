@@ -82,7 +82,11 @@ AudioOutputI2S *out;
 void syncTime() {
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
     struct tm timeinfo;
-    while (!getLocalTime(&timeinfo)) { delay(500); }
+    int retry = 0;
+    while (!getLocalTime(&timeinfo) && retry < 10) { 
+        delay(500); 
+        retry++;
+    }
 }
 
 // ------------------------------------------------------------------
@@ -203,6 +207,132 @@ String getGPTSummary(String systemRole, String userContext) {
 
 // ------------------------------------------------------------------
 
+//* --- ROBOT FACE ---
+
+void drawFace() {
+    int centerX = 160;
+    int centerY = 90;
+
+    if (isRecording) {
+        canvas.fillCircle(centerX - 50, centerY, 22, NAVY);
+        canvas.fillCircle(centerX + 50, centerY, 22, NAVY);
+        canvas.fillCircle(centerX - 50, centerY - 2, 8, WHITE);
+        canvas.fillCircle(centerX + 50, centerY - 2, 8, WHITE);
+    } 
+    else if (statusMessage == "Gondolkodom..." || statusMessage == "Feldolgozas...") {
+        canvas.fillCircle(centerX - 50, centerY - 5, 18, YELLOW);
+        canvas.fillCircle(centerX + 50, centerY - 5, 18, YELLOW);
+        canvas.fillCircle(centerX - 50, centerY - 10, 6, BLACK);
+        canvas.fillCircle(centerX + 50, centerY - 10, 6, BLACK);
+    } 
+    else {
+        canvas.fillCircle(centerX - 50, centerY, 18, NAVY);
+        canvas.fillCircle(centerX + 50, centerY, 18, NAVY);
+        canvas.fillCircle(centerX - 46, centerY - 4, 6, WHITE);
+        canvas.fillCircle(centerX + 46, centerY - 4, 6, WHITE);
+    }
+
+    if (isPlayingTTS) {
+        int mouthHeight = 8 + ((millis() / 120) % 4) * 6;
+        canvas.fillRoundRect(centerX - 25, 135 - (mouthHeight / 2), 50, mouthHeight, 6, WHITE);
+    } 
+    else if (isRecording) {
+        canvas.fillCircle(centerX, 135, 10, GREEN);
+    } 
+    else {
+        canvas.fillRoundRect(centerX - 20, 135, 40, 6, 3, WHITE);
+    }
+}
+
+
+void drawUI() {
+    canvas.fillScreen(BLACK);
+
+    if(currState == CLOCK_STATE) {
+        //* --- DIGITAL CLOCK ---
+        //* top bar
+        canvas.setTextDatum(TC_DATUM); //* top-center
+        canvas.setTextColor(DARKGREY);
+        canvas.setTextSize(1);
+        if(isAlarmSet) {
+            char alarmBuffer[32];
+            sprintf(alarmBuffer, "Ebreszto: %02d:%02d", alarmHour, alarmMinute);
+            canvas.drawString(alarmBuffer, 160, 10);
+        } else {
+            canvas.drawString("Ebreszto: Nincs beallitva", 160, 10);
+        }
+
+        //* middle bar
+        struct tm timeinfo;
+        if(getLocalTime((&timeinfo))) {
+            char timeBuffer[10];
+            sprintf(timeBuffer, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+
+            canvas.setTextColor(CYAN, BLACK);
+            canvas.setTextDatum(MC_DATUM); //* middle-center
+            canvas.setTextSize(5);
+            canvas.drawString(timeBuffer, 160, 95);
+
+            char dateBuffer[32];
+            sprintf(dateBuffer, "%04d.%02d.%02d.", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
+            canvas.setTextColor(WHITE);
+            canvas.setTextSize(2);
+            canvas.drawString(dateBuffer, 160, 140);
+        } else {
+            canvas.setTextColor(RED);
+            canvas.setTextDatum(MC_DATUM);
+            canvas.setTextSize(2);
+            canvas.drawString("Ido szinkroniizalasa...", 160, 95);
+        }
+
+        //* bottom bar
+        canvas.drawRoundRect(10, 185, 300, 45, 8, GREEN);
+        canvas.setTextColor(GREEN);
+        canvas.setTextSize(2);
+        canvas.drawString("TARTSD NYOMVA A BESZEDHEZ", 160, 207);
+    }
+    else if(currState == CHAT_STATE) {
+        //* --- CHAT BOT VIEW ---
+        //* top bar
+        canvas.fillRect(0, 0, 320, 25, NAVY);
+        canvas.setTextColor(WHITE);
+        canvas.setTextDatum(MC_DATUM);
+        canvas.setTextSize(2);
+        canvas.drawString(statusMessage, 160, 12);
+
+        //* text box
+        drawFace();
+
+        canvas.setTextDatum(BC_DATUM);
+        canvas.setTextSize(1);
+        canvas.setTextColor(YELLOW);
+
+        if (lastAIReply.length() > 0) {
+            // AI válasz megjelenítése a kijelző alján
+            canvas.drawString(lastAIReply, 160, 230);
+        } else if (lastUserSpeech.length() > 0) {
+            // Felhasználói beszéd megjelenítése
+            canvas.drawString(lastUserSpeech, 160, 230);
+        }
+    }
+
+    if (isRinging) {
+        canvas.fillScreen(RED);
+        canvas.setTextColor(WHITE);
+        canvas.setTextDatum(MC_DATUM);
+        canvas.setTextSize(4);
+        canvas.drawString("EBRESZTO!", 160, 100);
+        canvas.setTextSize(2);
+        canvas.drawString("Erints/Uss a szundihoz!", 160, 160);
+    }
+
+    canvas.pushSprite(0, 0);
+}
+
+
+
+// ------------------------------------------------------------------
+
 //* --- TEXT TO SPEECH ---
 class AudioFileSourceWiFiClient : public AudioFileSource {
     private: 
@@ -225,57 +355,73 @@ void playTTS(String text) {
     if(text.length() == 0) return;
     isPlayingTTS = true;
 
-    WiFiClientSecure client;
-    client.setInsecure();
+    HTTPClient http;
+    http.begin("https://api.openai.com/v1/audio/speech");
+    http.addHeader("Authorization", "Bearer " + String(OPENAI_API_KEY));
+    http.addHeader("Content-Type", "application/json");
+    http.setTimeout(30000);
 
-    if(!client.connect("api.openai.com", 443)) {
-        isPlayingTTS = false;
-        return;
-    }
-
-    StaticJsonDocument<512> doc; 
+    DynamicJsonDocument doc(2048);
     doc["model"] = "tts-1";
     doc["input"] = text;
-    doc["voice"] = "nova"; //* Optional voices: alloy, echo, fable, onyx, nova, shimmer
+    doc["voice"] = "nova";
     doc["response_format"] = "mp3";
 
     String requestBody;
     serializeJson(doc, requestBody);
 
-    client.println("POST /v1/audio/speech HTTP/1.1");
-    client.println("Host: api.openai.com");
-    client.println("Authorization: Bearer " + String(OPENAI_API_KEY));
-    client.println("Content-Type: application/json");
-    client.print("Content-Length: ");
-    client.println(requestBody.length());
-    client.println("Connection: close");
-    client.println();
-    client.print(requestBody);
+    int httpCode = http.POST(requestBody);
 
-    while(client.connected()) {
-        String line = client.readStringUntil('\n');
-        if(line == "\r") break;
-    }
+    if (httpCode == HTTP_CODE_OK) {
+        File file = SD.open("/sounds/tts.mp3", FILE_WRITE);
+        if (file) {
+            WiFiClient *stream = http.getStreamPtr();
+            uint8_t buff[1024];
+            unsigned long lastDataTime = millis();
 
-    AudioFileSourceWiFiClient *fileSource = new AudioFileSourceWiFiClient(&client);
-    AudioOutputI2S *audioOut = new AudioOutputI2S();
-
-    audioOut->SetPinout(34, 33, 13);
-
-    AudioGeneratorMP3 *mp3Decoder = new AudioGeneratorMP3();
-    mp3Decoder->begin(fileSource, audioOut);
-
-    while(mp3Decoder->isRunning()) {
-        if(!mp3Decoder->loop()) {
-            mp3Decoder->stop();
+            while (http.connected() || stream->available()) {
+                size_t size = stream->available();
+                if (size > 0) {
+                    int c = stream->readBytes(buff, ((size > sizeof(buff)) ? sizeof(buff) : size));
+                    file.write(buff, c);
+                    lastDataTime = millis();
+                } else {
+                    delay(10);
+                    if (millis() - lastDataTime > 5000) break; 
+                }
+            }
+            file.close();
         }
-        M5.update();
+    } else {
+        Serial.printf("[TTS HIBA] HTTP kód: %d\n", httpCode);
     }
+    http.end();
 
-    delete mp3Decoder;
-    delete audioOut;
-    delete fileSource;
-    client.stop();
+    if (SD.exists("/sounds/tts.mp3")) {
+        AudioFileSourceSD *fileSD = new AudioFileSourceSD("/sounds/tts.mp3");
+        AudioOutputI2S *audioOutSD = new AudioOutputI2S();
+        
+        audioOutSD->SetPinout(34, 33, 13); 
+
+        AudioGeneratorMP3 *mp3Decoder = new AudioGeneratorMP3();
+        mp3Decoder->begin(fileSD, audioOutSD);
+
+        unsigned long lastDrawTime = 0;
+        while (mp3Decoder->isRunning()) {
+            if (!mp3Decoder->loop()) {
+                mp3Decoder->stop();
+            }
+            if (millis() - lastDrawTime > 40) {
+                lastDrawTime = millis();
+                M5.update();
+                drawUI();
+            }
+        }
+
+        delete mp3Decoder;
+        delete audioOutSD;
+        delete fileSD;
+    }
 
     isPlayingTTS = false;
     chatStateStartTime = millis();
@@ -285,13 +431,12 @@ void playTTS(String text) {
 //* --- SD SOUND PLAYER ---
 void playSDSound(const char* fileName) {
     if(!SD.exists(fileName)) {
-        Serial.printf("Hia: Nem talalhato hangfajl: %s\n", fileName);
+        Serial.printf("Hiba: Nem talalhato hangfajl: %s\n", fileName);
         return;
     }
 
     AudioFileSourceSD *fileSD = new AudioFileSourceSD(fileName);
     AudioOutputI2S *audioOutSD = new AudioOutputI2S();
-
     audioOutSD->SetPinout(I2S_BCLK_PIN, I2S_LRCK_PIN, I2S_DOUT_PIN);
 
     AudioGeneratorMP3 *mp3Decoder = new AudioGeneratorMP3();
@@ -302,6 +447,13 @@ void playSDSound(const char* fileName) {
             mp3Decoder->stop();
         }
         M5.update();
+        auto touch = M5.Touch.getDetail(0);
+        
+        if (isRinging && (touch.wasPressed() || touch.isPressed())) {
+            mp3Decoder->stop();
+            isRinging = false;
+            break;
+        }
     }
 
     delete mp3Decoder;
@@ -325,11 +477,26 @@ bool processIntent(String text) {
     JsonArray messages = doc.createNestedArray("messages");
     JsonObject systemMsg = messages.createNestedObject();
     systemMsg["role"] = "system";
-    systemMsg["content"] = "Te egy okosóra AI asszisztense vagy. A felhasználó mondata alapján dötsd el a szándékot! "
-                           "KIZÁRÓLAG egy érvényes JSON-t adj vissza! "
-                           "1. Ébresztésnél: {\"type\": \"alarm\", \"hour\": 7, \"minute\": 30} "
-                           "2. Kérdésnél/beszélgetésnél válaszolj röviden, max 2 mondatban: "
-                           "{\"type\": \"chat\", \"reply\": \"A válaszod...\"}";
+    systemMsg["content"] = R"(
+    Te egy M5CoreS3 okosóra intelligens, barátságos és lényegretörő AI asszisztense vagy. 
+
+    KIZÁRÓLAG egy érvényes JSON objektumot adj vissza, semmi más szöveget!
+
+    SZABÁLYOK:
+    1. ÉBRESZTŐ BEÁLLÍTÁSA:
+    Ha a felhasználó ébresztőt akar beállítani (pl. "Ébressz fel 7:30-kor", "Állíts ébresztőt nyolckor"):
+    {"type": "alarm", "hour": 7, "minute": 30}
+
+    2. ÁLTALÁNOS CHAT ÉS KÉRDÉSEK:
+    Minden más esetben (köszönések, tudományos/általános kérdések, viccek, tanácsok, fordítás, matek):
+    {"type": "chat", "reply": "A válaszod..."}
+
+    KÖVETELMÉNYEK A CHAT VÁLASZOKHOZ (reply):
+    - Maximum 1-3 rövid, tömör mondatban válaszolj!
+    - A válaszod legyen természetes és jól érthető felolvasva (TTS hangszóróhoz optimalizálva).
+    - Ha valaminek a köszöntését kérik (pl. "Köszönj Annának"), válaszolj közvetlenül (pl. "Szia Anna! Szép napot kívánok!").
+    - Általános tudásalapú kérdésekre adj pontos, közvetlen választ mellébeszélés nélkül.
+    )" ;
     JsonObject userMsg = messages.createNestedObject();
     userMsg["role"] = "user";
     userMsg["content"] = text;
@@ -460,7 +627,7 @@ String sendAudioToWhisper(byte* wavHeader, uint32_t recorded_bytes) {
     head += "Content-Type: audio/wav\r\n\r\n";
 
     //* end of multipart message
-    String tail = "\r\n" + boundary + "--\r\n";
+    String tail = "\r\n--" + boundary + "--\r\n";
 
     uint32_t contentLength = head.length() + 44 + recorded_bytes + tail.length();
 
@@ -544,6 +711,7 @@ void checkAlarm() {
         if(timeInfo.tm_hour == alarmHour && timeInfo.tm_min == alarmMinute) {
             isAlarmSet = false; //* alarm set off, otherwise morning routine would run 60 times per minute
             isRinging = true;
+            M5.Speaker.begin();
         }
     }
 }
@@ -565,22 +733,29 @@ void checkTableKnock() {
 void setup() {
     auto cfg = M5.config();
     M5.begin(cfg);
+    M5.Speaker.end();
     
+    Serial.begin(115200);
     canvas.createSprite(320, 240);
-    
     rec_data = (typeof(rec_data))heap_caps_malloc(record_size * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     
     M5.Display.setTextColor(WHITE);
     M5.Display.setTextSize(2);
     M5.Display.println("Inditas...");
-    
-    syncTime(); 
-    
-    M5.Display.println("WiFi halozatok beallitasa...");
+
+    M5.Speaker.begin();
+    M5.Speaker.setVolume(200);
+
+    Serial.println("SD kartya inicializalasa...");
+    if(!SD.begin(SD_CS_PIN)) {
+        Serial.println("Hiba: Az SD kartya nem indult el!");
+    } else {
+        Serial.println("SD kartya OK!");
+    }
+
+    M5.Display.println("WiFi csatlakozas...");
     wifiMulti.addAP(WIFI_SSID1, WIFI_PASS1);
     wifiMulti.addAP(WIFI_SSID2, WIFI_PASS2);
-    
-    M5.Display.print("Csatlakozas...");
     
     while(wifiMulti.run() != WL_CONNECTED) {
         delay(500);
@@ -588,120 +763,14 @@ void setup() {
     }
     
     M5.Display.println("");
-    M5.Display.print("Sikeresen csatlakozva ehhez: ");
-    M5.Display.println(WiFi.SSID());
-    M5.Display.print("IP cim: ");
-    M5.Display.println(WiFi.localIP());
+    M5.Display.println("WiFi OK!");
+    
     playSDSound(SOUND_WIFI_OK);
 
-    Serial.begin(115200);
-    while(!Serial) {
-        ; //* Wait until the port get set up
-    }
-
-    Serial.println("SD kartya inicializalasa folyamatban...");
-
-    if(!SD.begin(SD_CS_PIN)) {
-        Serial.println("Hiba: Az SD kartyat nem sikerut inicializalni!");
-        Serial.println("Ellenorizd a pineket és hogy be van-e dugva a kartya");
-    } else {
-        Serial.println("SD kartya sikeresen inicializalva!");
-    }
-}
-
-// ------------------------------------------------------------------
-
-//* --- UI ---
-void drawUI() {
-    canvas.fillScreen(BLACK);
-
-    if(currState == CLOCK_STATE) {
-        //* --- DIGITAL CLOCK ---
-        //* top bar
-        canvas.setTextDatum(TC_DATUM); //* top-center
-        canvas.setTextColor(DARKGREY);
-        canvas.setTextSize(1);
-        if(isAlarmSet) {
-            char alarmBuffer[32];
-            sprintf(alarmBuffer, "Ebreszto: %02d:%02d", alarmHour, alarmMinute);
-            canvas.drawString(alarmBuffer, 160, 10);
-        } else {
-            canvas.drawString("Ebreszto: Nincs beallitva", 160, 10);
-        }
-
-        //* middle bar
-        struct tm timeinfo;
-        if(getLocalTime((&timeinfo))) {
-            char timeBuffer[10];
-            sprintf(timeBuffer, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-
-            canvas.setTextColor(CYAN, BLACK);
-            canvas.setTextDatum(MC_DATUM); //* middle-center
-            canvas.setTextSize(5);
-            canvas.drawString(timeBuffer, 160, 95);
-
-            char dateBuffer[32];
-            sprintf(dateBuffer, "%04d.%02d.%02d.", timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
-            canvas.setTextColor(WHITE);
-            canvas.setTextSize(2);
-            canvas.drawString(dateBuffer, 160, 140);
-        } else {
-            canvas.setTextColor(RED);
-            canvas.setTextDatum(MC_DATUM);
-            canvas.setTextSize(2);
-            canvas.drawString("Ido szinkroniizalasa...", 160, 95);
-        }
-
-        //* bottom bar
-        canvas.drawRoundRect(10, 185, 300, 45, 8, GREEN);
-        canvas.setTextColor(GREEN);
-        canvas.setTextSize(2);
-        canvas.drawString("TARTSD NYOMVA A BESZEDHEZ", 160, 207);
-    }
-    else if(currState == CHAT_STATE) {
-        //* --- CHAT BOT VIEW ---
-        //* top bar
-        canvas.fillRect(0, 0, 320,  30, NAVY);
-        canvas.setTextColor(WHITE);
-        canvas.setTextDatum(MC_DATUM);
-        canvas.setTextSize(2);
-        canvas.drawString(statusMessage, 160, 15);
-
-        //* text box
-        canvas.setTextDatum(TL_DATUM); //* top-left
-        canvas.setTextSize(2);
-        canvas.setTextWrap(true);
-
-        //* user side
-        if(lastUserSpeech.length() > 0) {
-            canvas.setTextColor(GREEN);
-            canvas.drawString("Te: ", 10, 40);
-            canvas.setTextColor(WHITE);
-            canvas.setCursor(10, 60);
-            canvas.print(lastUserSpeech);
-        }
-
-        //* ai reply
-        if(lastAIReply.length() > 0) {
-            canvas.setTextColor(CYAN);
-            canvas.drawString("Ai: ", 10, 125);
-            canvas.setTextColor(WHITE);
-            canvas.setCursor(10, 145);
-            canvas.print(lastAIReply);
-        }
-    }
-
-    if (isRinging) {
-        canvas.fillScreen(RED);
-        canvas.setTextColor(WHITE);
-        canvas.setTextDatum(MC_DATUM);
-        canvas.setTextSize(4);
-        canvas.drawString("EBRESZTO!", 160, 100);
-        canvas.setTextSize(2);
-        canvas.drawString("Erints/Uss a szundihoz!", 160, 160);
-    }
-
-    canvas.pushSprite(0, 0);
+    M5.Display.println("Ido szinkronizalasa...");
+    syncTime();
+    
+    delay(1000);
 }
 
 // ------------------------------------------------------------------
@@ -721,14 +790,9 @@ void loop() {
     }
 
     if(isRinging) {
-        checkTableKnock();
-        if(millis() - lastBeep > 500) {
-            lastBeep = millis();
-            M5.Speaker.tone(1000, 200);
-        }
-        if(touch.wasPressed()) {
-            M5.Speaker.stop();
-            isRinging = false;
+        playSDSound("/sounds/alarm.mp3");
+
+        if(!isRinging) {
             playDailyBriefing();
         }
         drawUI();
@@ -752,10 +816,10 @@ void loop() {
         if(touch.y < 120) playDailyBriefing(); //* upper side of the screen was pressed -> daily briefing 
         else {  //* bottom side of the screen was pressed -> STT
             startRecordingUI();
+            drawUI();
             int i = 0;
             while(M5.Touch.getDetail(0).isPressed() && i < record_size) {
                 M5.update();
-                drawUI();
                 if(M5.Mic.record(&rec_data[i], record_length, record_samplerate)) i += record_length;
             }
             stopRecordingUI();
@@ -766,10 +830,25 @@ void loop() {
             createWavHeader(wavHeader, recorded_bytes);
 
             String whisperResponse = sendAudioToWhisper(wavHeader, recorded_bytes);
+
+            Serial.println("[WHISPER NYERS VÁLASZ]:");
+            Serial.println(whisperResponse);
             
             DynamicJsonDocument whisperDoc(1024);
             deserializeJson(whisperDoc, whisperResponse);
             String transcribedText = whisperDoc["text"].as<String>();
+
+            int16_t maxVolume = 0;
+            for (int j = 0; j < i; j++) {
+                if (abs(rec_data[j]) > maxVolume) maxVolume = abs(rec_data[j]);
+            }
+
+            Serial.println("====================================");
+            Serial.printf("[MIC TEST] Max felvett hangerő: %d\n", maxVolume);
+            Serial.printf("[WHISPER] Felismert szöveg: '%s'\n", transcribedText.c_str());
+            Serial.println("====================================");
+
+            lastUserSpeech = transcribedText;
             
             if (transcribedText.length() > 0) {
                 if (!processIntent(transcribedText)) {
