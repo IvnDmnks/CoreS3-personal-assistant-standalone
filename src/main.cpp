@@ -19,9 +19,13 @@ void syncTime() {
 void setup() {
     auto cfg = M5.config();
     M5.begin(cfg);
-    M5.Speaker.end();
     
     Serial.begin(115200);
+
+    // Hangerő és M5Speaker inicializálása szelíd szintre (0-255)
+    M5.Speaker.begin();
+    M5.Speaker.setVolume(120);
+
     canvas.createSprite(320, 240);
     rec_data = (typeof(rec_data))heap_caps_malloc(record_size * sizeof(int16_t), MALLOC_CAP_SPIRAM);
     
@@ -29,33 +33,18 @@ void setup() {
     M5.Display.setTextSize(2);
     M5.Display.println("Inditas...");
 
-    M5.Speaker.begin();
-    M5.Speaker.setVolume(200);
-
-    Serial.println("SD kartya inicializalasa...");
     if(!SD.begin(SD_CS_PIN)) {
         Serial.println("Hiba: Az SD kartya nem indult el!");
-    } else {
-        Serial.println("SD kartya OK!");
     }
 
-    M5.Display.println("WiFi csatlakozas...");
     wifiMulti.addAP(WIFI_SSID1, WIFI_PASS1);
     wifiMulti.addAP(WIFI_SSID2, WIFI_PASS2);
     
     while(wifiMulti.run() != WL_CONNECTED) {
         delay(500);
-        M5.Display.print(".");
     }
-    
-    M5.Display.println("");
-    M5.Display.println("WiFi OK!");
-    
-    playSDSound(SOUND_WIFI_OK);
 
-    M5.Display.println("Ido szinkronizalasa...");
     syncTime();
-    
     delay(1000);
 }
 
@@ -67,21 +56,35 @@ void loop() {
     M5.update();
     auto touch = M5.Touch.getDetail(0);
 
-    if (wifiMulti.run() != WL_CONNECTED) {
-        playSDSound(SOUND_WIFI_ERR);
-        Serial.println("WiFi kapcsolat megszakadt, ujracsatlakozas...");
-        delay(1000); 
+    // Ébresztő időpont ellenőrzése
+    if(millis() - lastAlarmCheck >= 1000) {
+        lastAlarmCheck = millis();
+        checkAlarm();
     }
 
-    if(isRinging) {
-        playSDSound("/sounds/alarm.wav");
+    // Asztalütögetés ellenőrzése az IMU-val
+    checkTableKnock();
 
-        if(!isRinging) {
-            playDailyBriefing();
-        }
+    // Ha éppen csörög az ébresztő:
+    if(isRinging) {
+    // 1. Kijelző kirajzolása PIROSRA az ébresztés pillanatában
+    drawUI(); 
+
+    // 2. Érintés ellenőrzése
+    M5.update();
+    auto touch = M5.Touch.getDetail(0);
+    if (touch.wasPressed() || touch.isPressed()) {
+        isRinging = false;
+        M5.Speaker.stop();
         drawUI();
+        playDailyBriefing();
         return;
     }
+
+    // 3. Hang lejátszása
+    playSDSound("/sounds/alarm.mp3");
+    return;
+}
 
     if(millis() - lastAlarmCheck >= 1000) {
         lastAlarmCheck = millis();

@@ -128,13 +128,11 @@ bool processIntent(String text) {
     DynamicJsonDocument doc(4096);
     doc["model"] = "gpt-4o-mini";
     
-    // 1. SD-ről korábbi előzmények betöltése
     if (SD.exists(CHAT_HISTORY_FILE)) {
         File f = SD.open(CHAT_HISTORY_FILE, FILE_READ);
         deserializeJson(doc, f);
         f.close();
     } else {
-        // Ha még nincs előzmény, beállítjuk az alap rendszert
         JsonObject response_format = doc.createNestedObject("response_format");
         response_format["type"] = "json_object";
         
@@ -163,7 +161,6 @@ bool processIntent(String text) {
     )" ;
     }
 
-    // 2. Felhasználó új mondatának hozzáadása a beszélgetéshez
     JsonArray messages = doc["messages"];
     JsonObject userMsg = messages.createNestedObject();
     userMsg["role"] = "user";
@@ -202,10 +199,9 @@ bool processIntent(String text) {
         else if (intentType == "chat") {
             String aiReply = resultDoc["reply"].as<String>();
             
-            // 3. AI válaszának hozzáadása a memóriához és mentése SD-re
             JsonObject assistantMsg = messages.createNestedObject();
             assistantMsg["role"] = "assistant";
-            assistantMsg["content"] = gptJsonString; // JSON-ként mentjük el, hogy a szerver értse
+            assistantMsg["content"] = gptJsonString;
 
             File f = SD.open(CHAT_HISTORY_FILE, FILE_WRITE);
             if (f) {
@@ -226,6 +222,11 @@ bool processIntent(String text) {
 
 //* --- SPEECH TO TEXT | PUSH TO TALK ---
 void startRecordingUI() {
+    if (rec_data == nullptr) {
+        Serial.println("Hiba: rec_data memória hiányzik!");
+        return;
+    }
+    
     playSDSound(SOUND_LISTENING);
     isRecording = true;
     M5.Mic.begin();

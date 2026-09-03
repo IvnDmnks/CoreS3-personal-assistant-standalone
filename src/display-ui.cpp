@@ -118,13 +118,18 @@ void drawUI() {
     }
 
     if (isRinging) {
-        canvas.fillScreen(RED);
+        canvas.fillSprite(RED);
         canvas.setTextColor(WHITE);
         canvas.setTextDatum(MC_DATUM);
-        canvas.setTextSize(4);
-        canvas.drawString("EBRESZTO!", 160, 100);
+        
+        canvas.setTextSize(3);
+        canvas.drawString("EBRESZO!", 160, 90);
+        
         canvas.setTextSize(2);
-        canvas.drawString("Erints/Uss a szundihoz!", 160, 160);
+        canvas.drawString("Koppints a leallitashoz!", 160, 150);
+        
+        canvas.pushSprite(0, 0);
+        return;
     }
 
     canvas.pushSprite(0, 0);

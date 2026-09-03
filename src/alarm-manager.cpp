@@ -3,7 +3,6 @@
 #include "ai-assistant.h"
 #include "display-ui.h"
 
-//* --- ALARM CLOCK ---
 void checkAlarm() {
     if (!isAlarmSet || isRinging) return;
     
@@ -12,13 +11,6 @@ void checkAlarm() {
         if (timeInfo.tm_hour == alarmHour && timeInfo.tm_min == alarmMinute) {
             isAlarmSet = false;
             isRinging = true;
-            if (SD.exists("/sounds/alarm.mp3")) {
-                playSDSound("/sounds/alarm.mp3");
-            } else {
-                M5.Speaker.begin();
-                M5.Speaker.setVolume(200);
-                M5.Speaker.tone(3000, 1000); 
-            }
         }
     }
 }
@@ -31,13 +23,12 @@ void checkTableKnock() {
     
     float totalAccelerate = sqrt(ax * ax + ay * ay + az * az);
     if (totalAccelerate > 2.2) {
-        M5.Speaker.stop();
         isRinging = false;
+        M5.Speaker.stop();
         playDailyBriefing();
     }
 }
 
-//* --- MORNING ROUTINE (EZ TÖKÉLETES, MARAD) ---
 void playDailyBriefing() {
     currState = CHAT_STATE;
     statusMessage = "Napi osszefoglalo...";
@@ -51,9 +42,7 @@ void playDailyBriefing() {
     String system_prompt = "Egy asztali AI asszisztens vagy. Foglald ossze a napot kozvetlen, baratsagos hangnemben, magyarul! Maximum 3-4 mondat.";
                             
     lastAIReply = "AI general...";
-    
     String ai_text = getGPTSummary(system_prompt, prompt_context);
-    
     lastAIReply = ai_text;
     
     playTTS(ai_text);

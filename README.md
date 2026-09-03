@@ -37,7 +37,7 @@ An all-in-one, fully standalone desktop AI assistant and smart clock powered by 
      * `error.mp3`
      * `wifi_ok.mp3`
      * `wifi_err.mp3`
-     * `alarm.wav`
+     * `alarm.mp3`
    * Insert the MicroSD card into your M5Stack CoreS3.
 
 3. **Configure your secrets:**
