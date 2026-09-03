@@ -43,7 +43,15 @@ void drawUI() {
     if(currState == CLOCK_STATE) {
         //* --- DIGITAL CLOCK ---
         //* top bar
-        M5.Display.setBrightness(70);
+        struct tm timeinfo;
+        if(getLocalTime(&timeinfo)) {
+            if(timeinfo.tm_hour >= 23 || timeinfo.tm_hour < 6) {
+                M5.Display.setBrightness(30);
+            }
+            else {
+                M5.Display.setBrightness(70);
+            }
+        }
         canvas.setTextDatum(TC_DATUM); //* top-center
         canvas.setTextColor(DARKGREY);
         canvas.setTextSize(1);
@@ -56,7 +64,6 @@ void drawUI() {
         }
 
         //* middle bar
-        struct tm timeinfo;
         if(getLocalTime((&timeinfo))) {
             char timeBuffer[10];
             sprintf(timeBuffer, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);

@@ -26,7 +26,6 @@
 #define SOUND_ALARM_SET "/sounds/alarm_set.mp3"
 #define SOUND_LISTENING "/sounds/listening.mp3"
 #define SOUND_ERROR     "/sounds/error.mp3"
-#define SOUND_WIFI_OK   "/sounds/wifi_ok.mp3"
 #define SOUND_WIFI_ERR  "/sounds/wifi_err.mp3"
 
 //* ---------------

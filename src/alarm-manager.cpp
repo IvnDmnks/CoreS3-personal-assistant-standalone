@@ -5,30 +5,39 @@
 
 //* --- ALARM CLOCK ---
 void checkAlarm() {
-    if(!isAlarmSet || isRinging) return;
+    if (!isAlarmSet || isRinging) return;
     
     struct tm timeInfo;
-    if(getLocalTime(&timeInfo)) {
-        if(timeInfo.tm_hour == alarmHour && timeInfo.tm_min == alarmMinute) {
-            isAlarmSet = false; //* alarm set off, otherwise morning routine would run 60 times per minute
+    if (getLocalTime(&timeInfo)) {
+        if (timeInfo.tm_hour == alarmHour && timeInfo.tm_min == alarmMinute) {
+            isAlarmSet = false;
             isRinging = true;
-            M5.Speaker.begin();
+            if (SD.exists("/sounds/alarm.mp3")) {
+                playSDSound("/sounds/alarm.mp3");
+            } else {
+                M5.Speaker.begin();
+                M5.Speaker.setVolume(200);
+                M5.Speaker.tone(3000, 1000); 
+            }
         }
     }
 }
 
 void checkTableKnock() {
+    if (!isRinging) return;
+
     float ax, ay, az;
     M5.Imu.getAccelData(&ax, &ay, &az);
-    float totalAccelerate = sqrt(ax*ax + ay*ay + az*az);
-    if(totalAccelerate > 2.0) {
+    
+    float totalAccelerate = sqrt(ax * ax + ay * ay + az * az);
+    if (totalAccelerate > 2.2) {
         M5.Speaker.stop();
         isRinging = false;
         playDailyBriefing();
     }
 }
 
-//* --- MORNING ROUTINE ---
+//* --- MORNING ROUTINE (EZ TÖKÉLETES, MARAD) ---
 void playDailyBriefing() {
     currState = CHAT_STATE;
     statusMessage = "Napi osszefoglalo...";
