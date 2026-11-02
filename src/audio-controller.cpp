@@ -27,13 +27,14 @@ void playSDSound(const char* fileName) {
                 mp3->stop();
             }
 
-            if (millis() - lastCheck > 50) {
+           if (millis() - lastCheck > 50) {
                 lastCheck = millis();
                 
                 M5.update();
+                checkTableKnock();
                 auto touch = M5.Touch.getDetail(0);
 
-                if (isRinging && (touch.wasPressed() || touch.isPressed())) {
+                if ((isRinging && (touch.wasPressed() || touch.isPressed())) || !isRinging) {
                     isRinging = false;
                     mp3->stop();
                     break;

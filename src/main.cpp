@@ -62,29 +62,29 @@ void loop() {
         checkAlarm();
     }
 
-    // Asztalütögetés ellenőrzése az IMU-val
     checkTableKnock();
 
-    // Ha éppen csörög az ébresztő:
     if(isRinging) {
-    // 1. Kijelző kirajzolása PIROSRA az ébresztés pillanatában
-    drawUI(); 
+        drawUI(); 
 
-    // 2. Érintés ellenőrzése
-    M5.update();
-    auto touch = M5.Touch.getDetail(0);
-    if (touch.wasPressed() || touch.isPressed()) {
-        isRinging = false;
-        M5.Speaker.stop();
-        drawUI();
-        playDailyBriefing();
+        M5.update();
+        auto touch = M5.Touch.getDetail(0);
+        if (touch.wasPressed() || touch.isPressed()) {
+            isRinging = false;
+            M5.Speaker.stop();
+            drawUI();
+            playDailyBriefing();
+            return;
+        }
+
+        playSDSound("/sounds/alarm.mp3");
+        
+        if (!isRinging) {
+            drawUI();
+            playDailyBriefing();
+        }
         return;
     }
-
-    // 3. Hang lejátszása
-    playSDSound("/sounds/alarm.mp3");
-    return;
-}
 
     if(millis() - lastAlarmCheck >= 1000) {
         lastAlarmCheck = millis();

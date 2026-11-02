@@ -25,7 +25,6 @@ void checkTableKnock() {
     if (totalAccelerate > 2.2) {
         isRinging = false;
         M5.Speaker.stop();
-        playDailyBriefing();
     }
 }
 
